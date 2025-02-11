@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
+import CryptoJS from "crypto-js";
+import "./styles.css";
 
 const SalviumWallet = () => {
   const nodes = [
-    "http://localhost:8010/proxy/json_rpc",
     "http://seed01.salvium.io:19081/json_rpc",
     "http://seed02.salvium.io:19081/json_rpc",
     "http://seed03.salvium.io:19081/json_rpc"
@@ -11,103 +12,113 @@ const SalviumWallet = () => {
   const [rpcUrl, setRpcUrl] = useState(nodes[0]);
   const [balance, setBalance] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [page, setPage] = useState("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [seedPhrase, setSeedPhrase] = useState("");
+  const [confirmSeed, setConfirmSeed] = useState("");
+  const [walletLoaded, setWalletLoaded] = useState(false);
+  const [generatedSeed, setGeneratedSeed] = useState(null);
+
+  useEffect(() => {
+    const storedWallet = localStorage.getItem("walletData");
+    if (storedWallet) {
+      setPage("login");
+    } else {
+      setPage("create-wallet");
+    }
+  }, []);
 
   const formatAmount = (amount) => {
     return (amount / 1e8).toFixed(2).padStart(10);
   };
 
-  const fetchBalance = useCallback(async () => {
+  const handleGenerateWallet = async () => {
     const requestData = {
       jsonrpc: "2.0",
       id: "0",
-      method: "get_balance",
+      method: "create_wallet",
       params: {}
     };
     try {
       const response = await fetch(rpcUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestData)
       });
       const data = await response.json();
-      console.log("Raw Balance Response:", data);
-      
-      if (data.result && Array.isArray(data.result.balances) && data.result.balances.length > 0) {
-        const extractedBalance = data.result.balances[0].balance;
-        console.log("Extracted Balance:", extractedBalance);
-        setBalance(formatAmount(extractedBalance));
-      } else {
-        setBalance("Error: Invalid Balance");
+      if (data.result && data.result.mnemonic) {
+        setGeneratedSeed(data.result.mnemonic);
+        setPage("confirm-seed");
       }
     } catch (error) {
-      console.error("Error fetching balance:", error);
-      setBalance("Error");
+      console.error("Error generating wallet:", error);
     }
-  }, [rpcUrl]);
+  };
 
-  const fetchTransactions = useCallback(async () => {
-    const requestData = {
-      jsonrpc: "2.0",
-      id: "0",
-      method: "get_transfers",
-      params: { in: true, out: true }
-    };
-    try {
-      const response = await fetch(rpcUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(requestData)
-      });
-      const data = await response.json();
-      console.log("Transactions Response:", data);
-      console.log("Full Transaction Data:", data.result);
-      
-      if (data.result) {
-        const incoming = data.result.in.map(tx => ({ ...tx, type: "IN" })) || [];
-        const outgoing = data.result.out.map(tx => ({ ...tx, type: "OUT" })) || [];
-        const sortedTransactions = [...incoming, ...outgoing].sort((a, b) => b.timestamp - a.timestamp);
-        setTransactions(sortedTransactions);
-      } else {
-        setTransactions([]);
+  const handleConfirmSeed = () => {
+    if (confirmSeed === generatedSeed) {
+      setSeedPhrase(generatedSeed);
+      setPage("create-wallet");
+    } else {
+      alert("Seed phrases do not match. Please try again.");
+    }
+  };
+
+  const handleCreateWallet = async () => {
+    if (seedPhrase && username && password) {
+      const requestData = {
+        jsonrpc: "2.0",
+        id: "0",
+        method: "restore_deterministic_wallet",
+        params: { seed: seedPhrase, filename: username, password: password }
+      };
+      try {
+        const response = await fetch(rpcUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestData)
+        });
+        const data = await response.json();
+        if (data.result) {
+          const encryptedWallet = CryptoJS.AES.encrypt(seedPhrase, password).toString();
+          localStorage.setItem("walletData", JSON.stringify({ username, encryptedWallet }));
+          setPage("login");
+        }
+      } catch (error) {
+        console.error("Error creating wallet:", error);
       }
-    } catch (error) {
-      console.error("Error fetching transactions:", error);
     }
-  }, [rpcUrl]);
-
-  useEffect(() => {
-    fetchBalance();
-    fetchTransactions();
-  }, [fetchBalance, fetchTransactions]);
+  };
 
   return (
-    <div>
-      <h1>Salvium Web Wallet</h1>
-      <label>
-        Select Node:
-        <select onChange={(e) => setRpcUrl(e.target.value)} value={rpcUrl}>
-          {nodes.map((node, index) => (
-            <option key={index} value={node}>{node}</option>
-          ))}
-        </select>
-      </label>
-      <h2>Balance: {balance !== null ? `${balance} SAL` : "Loading..."}</h2>
-      <h3>Transactions:</h3>
-      <ul style={{ fontFamily: "monospace" }}>
-        {transactions.map((tx, index) => (
-          <li key={index} style={{ color: tx.type === "IN" ? "green" : "blue", display: "flex", justifyContent: "space-between", width: "100%" }}>
-            <span style={{ minWidth: "50px" }}>{tx.type}</span>
-            <span style={{ minWidth: "100px", textAlign: "right" }}>{formatAmount(tx.amount)} SAL</span>
-            <span>{tx.txid}</span>
-          </li>
-        ))}
-      </ul>
-      <button onClick={fetchBalance}>Refresh Balance</button>
-      <button onClick={fetchTransactions}>Refresh Transactions</button>
+    <div className="container">
+      {page === "login" && (
+        <div className="login-box">
+          <h1>Login to Salvium Wallet</h1>
+          <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button onClick={() => setPage("create-wallet")}>Restore from Seed</button>
+          <button onClick={handleGenerateWallet}>Create New Wallet</button>
+        </div>
+      )}
+      {page === "confirm-seed" && (
+        <div className="seed-box">
+          <h1>Confirm Your Seed Phrase</h1>
+          <p>{generatedSeed}</p>
+          <input type="text" placeholder="Re-enter your seed phrase" value={confirmSeed} onChange={(e) => setConfirmSeed(e.target.value)} />
+          <button onClick={handleConfirmSeed}>Confirm</button>
+        </div>
+      )}
+      {page === "create-wallet" && (
+        <div className="wallet-box">
+          <h1>Create Wallet</h1>
+          <input type="text" placeholder="Enter your Salvium seed" value={seedPhrase} onChange={(e) => setSeedPhrase(e.target.value)} />
+          <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button onClick={handleCreateWallet}>Create Wallet</button>
+        </div>
+      )}
     </div>
   );
 };
